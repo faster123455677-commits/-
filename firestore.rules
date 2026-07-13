@@ -1,0 +1,62 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper to check if a user is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+    
+    // Helper to check if a user is the creator (admin)
+    function isCreator() {
+      return isAuth() && request.auth.token.email == 'faster123455677@gmail.com';
+    }
+    
+    // Helper to check if string size is within safe bounds
+    function isValidString(val, min, max) {
+      return val is string && val.size() >= min && val.size() <= max;
+    }
+
+    // Rules for users collection
+    match /users/{userId} {
+      allow read: if isAuth();
+      // Allow users to create or update their own profile, or creator to moderate
+      allow write: if isCreator() || (isAuth() && request.auth.uid == userId);
+    }
+    
+    // Rules for chats collection
+    match /chats/{chatId} {
+      allow read: if isAuth() && (request.auth.uid in resource.data.members || isCreator());
+      // Allow creation if the creator is in the members list
+      allow create: if isAuth() && (request.auth.uid in request.resource.data.members) && request.resource.data.members.size() <= 100;
+      // Allow update if member, or creator
+      allow update: if isCreator() || (isAuth() && (request.auth.uid in resource.data.members) && (request.auth.uid in request.resource.data.members));
+      allow delete: if isCreator();
+    }
+    
+    // Rules for messages subcollection
+    match /chats/{chatId}/messages/{messageId} {
+      allow read: if isAuth() && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members || isCreator());
+      allow create: if isAuth() && 
+                    (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members) &&
+                    request.resource.data.senderId == request.auth.uid &&
+                    isValidString(request.resource.data.content, 1, 5000);
+      allow update: if isCreator() || (isAuth() && resource.data.senderId == request.auth.uid && isValidString(request.resource.data.content, 1, 5000));
+      allow delete: if isCreator() || (isAuth() && resource.data.senderId == request.auth.uid);
+    }
+    
+    // Rules for calls collection
+    match /calls/{callId} {
+      allow read: if isAuth() && (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow create: if isAuth() && request.resource.data.callerId == request.auth.uid;
+      allow update: if isAuth() && (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow delete: if isAuth() && (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+    }
+    
+    // Rules for app_config settings
+    match /settings/app_config {
+      allow read: if isAuth();
+      allow write: if isCreator();
+    }
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Public profile of a user",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "username": { "type": "string" },
+        "avatar": { "type": "string" },
+        "status": { "type": "string" },
+        "role": { "type": "string" },
+        "email": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "username", "createdAt"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "A direct message or group chat channel",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["direct", "group"] },
+        "name": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "members": { "type": "array" }
+      },
+      "required": ["id", "type", "createdAt", "members"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat message",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderAvatar": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "type": { "type": "string", "enum": ["text", "call_log", "system"] }
+      },
+      "required": ["id", "senderId", "senderName", "content", "createdAt"]
+    },
+    "Call": {
+      "title": "Call",
+      "description": "An interactive direct voice/video call session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "callerId": { "type": "string" },
+        "callerName": { "type": "string" },
+        "callerAvatar": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "status": { "type": "string", "enum": ["dialing", "ringing", "connected", "ended"] },
+        "type": { "type": "string", "enum": ["voice", "video"] },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "callerId", "receiverId", "status", "type", "createdAt"]
+    },
+    "AppConfig": {
+      "title": "AppConfig",
+      "description": "Global application settings controlled by the creator",
+      "type": "object",
+      "properties": {
+        "announcements": { "type": "array" },
+        "featureToggles": { "type": "object" },
+        "creatorCustomText": { "type": "string" },
+        "themeAccent": { "type": "string" }
+      },
+      "required": ["featureToggles"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Collection of user profiles"
+    },
+    "chats/{chatId}": {
+      "schema": { "$ref": "#/entities/Chat" },
+      "description": "Collection of chat channels"
+    },
+    "chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Subcollection of chat messages"
+    },
+    "calls/{callId}": {
+      "schema": { "$ref": "#/entities/Call" },
+      "description": "Collection of call signaling records"
+    },
+    "settings/app_config": {
+      "schema": { "$ref": "#/entities/AppConfig" },
+      "description": "Document holding creator custom controls and toggles"
+    }
+  }
+}

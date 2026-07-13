@@ -1,0 +1,11 @@
+{
+  "name": "Тугрик",
+  "description": "Анонимный мессенджер с поддержкой личных сообщений, аудио/видеозвонков, групповых чатов и панели управления создателя.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
