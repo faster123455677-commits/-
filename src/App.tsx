@@ -104,74 +104,122 @@ export default function App() {
     if (currentUser.uid.startsWith('demo_')) return; // Skip Firestore setup for demo user
 
     const userRef = doc(db, 'users', currentUser.uid);
-    
-    // Subscribe to current user profile in real-time
-    const unsubProfile = onSnapshot(userRef, async (snap) => {
+    let isSubscribed = true;
+    let unsubProfile: (() => void) | null = null;
+
+    const setupProfile = async () => {
+      let snapExists = false;
+      let existingData: UserProfile | null = null;
+      
+      // 1. Try to proactively read the profile document first to see if it already exists
       try {
+        const snap = await getDoc(userRef);
         if (snap.exists()) {
-          setUserProfile(snap.data() as UserProfile);
-          setAuthLoading(false);
-        } else {
-          // Doc doesn't exist yet (creating profile on first registration)
-          // Check if there was an saved temporary username setup
-          const pendingName = localStorage.getItem('pending_tugrik_username') || `Тугрик_${Math.floor(1000 + Math.random() * 9000)}`;
-          localStorage.removeItem('pending_tugrik_username');
-
-          const initialAvatar = ['🤖', '🦊', '🐱', '🐶', '🥷', '👾'][Math.floor(Math.random() * 6)];
-          
-          const newProfile: UserProfile = {
-            uid: currentUser.uid,
-            username: pendingName,
-            usernameLower: pendingName.toLowerCase(),
-            email: currentUser.email,
-            avatar: initialAvatar,
-            status: 'online',
-            role: currentUser.email === 'faster123455677@gmail.com' ? 'admin' : 'user',
-            createdAt: Date.now()
-          };
-
-          await setDoc(userRef, newProfile);
-          setUserProfile(newProfile);
-          setAuthLoading(false);
+          snapExists = true;
+          existingData = snap.data() as UserProfile;
         }
-      } catch (innerErr) {
-        console.error("Critical error in profile subscription handler:", innerErr);
-        // Ensure user is not locked out on registration error
-        const fallbackProfile: UserProfile = {
+      } catch (getErr) {
+        console.warn("Proactive user profile getDoc check failed (or was blocked by auth transition):", getErr);
+      }
+
+      if (!isSubscribed) return;
+
+      // 2. If it does not exist, create it proactively
+      if (!snapExists) {
+        const pendingName = localStorage.getItem('pending_tugrik_username') || `Тугрик_${Math.floor(1000 + Math.random() * 9000)}`;
+        localStorage.removeItem('pending_tugrik_username');
+
+        const initialAvatar = ['🤖', '🦊', '🐱', '🐶', '🥷', '👾'][Math.floor(Math.random() * 6)];
+        
+        const newProfile: UserProfile = {
           uid: currentUser.uid,
-          username: `Тугрик_${currentUser.uid.slice(0, 5)}`,
+          username: pendingName,
+          usernameLower: pendingName.toLowerCase(),
           email: currentUser.email,
-          avatar: '🤖',
+          avatar: initialAvatar,
           status: 'online',
           role: currentUser.email === 'faster123455677@gmail.com' ? 'admin' : 'user',
           createdAt: Date.now()
         };
-        setUserProfile(fallbackProfile);
-        setAuthLoading(false);
-      }
-    }, (error) => {
-      console.error("Firestore Profile snapshot subscription failed:", error);
-      // Fallback profile if snapshot is blocked (e.g. permission rules or missing database)
-      const fallbackProfile: UserProfile = {
-        uid: currentUser.uid,
-        username: currentUser.displayName || `Тугрик_${currentUser.uid.slice(0, 5)}`,
-        email: currentUser.email,
-        avatar: '🤖',
-        status: 'online',
-        role: currentUser.email === 'faster123455677@gmail.com' ? 'admin' : 'user',
-        createdAt: Date.now()
-      };
-      setUserProfile(fallbackProfile);
-      setAuthLoading(false);
-    });
 
-    // Update online status
-    updateDoc(userRef, { status: 'online' }).catch(err => {
-      console.warn("Status update bypassed (document may not exist yet or offline):", err);
-    });
+        try {
+          await setDoc(userRef, newProfile);
+          console.log("Proactively saved new user profile in Firestore:", newProfile);
+          if (isSubscribed) {
+            setUserProfile(newProfile);
+            setAuthLoading(false);
+          }
+        } catch (setErr) {
+          console.error("Critical: Failed to proactively setDoc user profile:", setErr);
+        }
+      } else if (existingData) {
+        // Document exists, update status and set state
+        if (isSubscribed) {
+          setUserProfile(existingData);
+          setAuthLoading(false);
+        }
+        await updateDoc(userRef, { status: 'online' }).catch(err => {
+          console.warn("Could not set status to online:", err);
+        });
+      }
+
+      // 3. Set up the real-time listener to sync changes (e.g. status updates)
+      try {
+        unsubProfile = onSnapshot(userRef, (snap) => {
+          if (!isSubscribed) return;
+          if (snap.exists()) {
+            setUserProfile(snap.data() as UserProfile);
+            setAuthLoading(false);
+          } else {
+            // Re-create if document was deleted or doesn't exist
+            const pendingName = `Тугрик_${Math.floor(1000 + Math.random() * 9000)}`;
+            const initialAvatar = ['🤖', '🦊', '🐱', '🐶', '🥷', '👾'][Math.floor(Math.random() * 6)];
+            const newProfile: UserProfile = {
+              uid: currentUser.uid,
+              username: pendingName,
+              usernameLower: pendingName.toLowerCase(),
+              email: currentUser.email,
+              avatar: initialAvatar,
+              status: 'online',
+              role: currentUser.email === 'faster123455677@gmail.com' ? 'admin' : 'user',
+              createdAt: Date.now()
+            };
+            setDoc(userRef, newProfile).catch(e => console.error("Error re-creating profile in snapshot:", e));
+          }
+        }, (error) => {
+          console.warn("Firestore Profile snapshot subscription failed:", error);
+          if (isSubscribed) {
+            // Set fallback profile if we don't have one yet
+            setUserProfile((prev) => {
+              if (prev) return prev;
+              return {
+                uid: currentUser.uid,
+                username: currentUser.displayName || `Тугрик_${currentUser.uid.slice(0, 5)}`,
+                email: currentUser.email,
+                avatar: '🤖',
+                status: 'online',
+                role: currentUser.email === 'faster123455677@gmail.com' ? 'admin' : 'user',
+                createdAt: Date.now()
+              };
+            });
+            setAuthLoading(false);
+          }
+        });
+      } catch (subErr) {
+        console.error("Failed to attach snapshot profile listener:", subErr);
+        if (isSubscribed) {
+          setAuthLoading(false);
+        }
+      }
+    };
+
+    setupProfile();
 
     return () => {
-      unsubProfile();
+      isSubscribed = false;
+      if (unsubProfile) {
+        unsubProfile();
+      }
     };
   }, [currentUser]);
 
@@ -409,7 +457,7 @@ export default function App() {
         width,
         height,
         isMinimized: false,
-        isMaximized: false,
+        isMaximized: type === 'chat',
         zIndex: maxZ + 1,
         type,
         chatData
@@ -502,6 +550,7 @@ export default function App() {
             onSelectChat={(chat) => {
               setWindows(prev => prev.map(w => w.id === win.id ? { ...w, chatData: chat } : w));
             }}
+            onCloseChat={() => closeWindow(win.id)}
           />
         );
       case 'console':
@@ -746,7 +795,7 @@ export default function App() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-slate-100 font-sans p-6 text-center animate-fade-in">
         <span className="w-10 h-10 border-4 border-violet-500 border-t-transparent rounded-full animate-spin mb-4"></span>
-        <p className="text-xs font-mono text-slate-400 mb-6">Бомбиловна шифрует сессию...</p>
+        <p className="text-xs font-mono text-slate-400 mb-6">Сеть зашифровывается...</p>
         
         <button
           onClick={handleSignOut}
@@ -817,10 +866,11 @@ export default function App() {
         userProfile={userProfile}
         currentConfig={appConfig}
         activeChatId={activeChat?.id || null}
-        onSelectChat={(chat, eventCoords) => {
+        onSelectChat={(chat, eventCoords, resolvedTitle) => {
           setActiveChat(chat);
           if (isWindowedMode) {
-            openWindow('chat', chat.name, chat.type === 'group' ? '👥' : '💬', chat, eventCoords);
+            const finalTitle = chat.type === 'group' ? (chat.name || 'Группа') : (resolvedTitle ? `@${resolvedTitle}` : 'Личный чат');
+            openWindow('chat', finalTitle, chat.type === 'group' ? '👥' : '💬', chat, eventCoords);
           } else {
             setCurrentView('chat');
           }
@@ -1064,15 +1114,28 @@ export default function App() {
                 currentConfig={appConfig}
                 userProfile={userProfile}
               />
+            ) : activeChat ? (
+              <div className="fixed inset-0 z-40 md:relative md:flex-1 h-full w-full bg-slate-950 flex flex-col">
+                <ChatArea
+                  currentUserId={currentUser.uid}
+                  userProfile={userProfile}
+                  currentConfig={appConfig}
+                  chat={activeChat}
+                  onInitiateCall={handleInitiateCall}
+                  onSelectChat={(chat) => setActiveChat(chat)}
+                  onCloseChat={() => setActiveChat(null)}
+                />
+              </div>
             ) : (
-              <ChatArea
-                currentUserId={currentUser.uid}
-                userProfile={userProfile}
-                currentConfig={appConfig}
-                chat={activeChat}
-                onInitiateCall={handleInitiateCall}
-                onSelectChat={(chat) => setActiveChat(chat)}
-              />
+              <div className="hidden md:flex flex-1 flex-col items-center justify-center p-8 text-center bg-slate-950/20 select-none">
+                <div className="w-16 h-16 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-3xl mb-4 animate-bounce">
+                  💬
+                </div>
+                <h3 className="text-sm font-bold text-slate-200">Выберите собеседника</h3>
+                <p className="text-[11px] text-slate-500 mt-1 max-w-xs font-mono">
+                  Перейдите в раздел «Личные» или «Группы» и выберите чат для начала анонимного диалога.
+                </p>
+              </div>
             )}
           </div>
         )}

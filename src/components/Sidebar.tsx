@@ -27,7 +27,7 @@ interface SidebarProps {
   userProfile: UserProfile;
   currentConfig: AppConfig;
   activeChatId: string | null;
-  onSelectChat: (chat: Chat, eventCoords?: { x: number; y: number }) => void;
+  onSelectChat: (chat: Chat, eventCoords?: { x: number; y: number}, resolvedTitle?: string) => void;
   onNavigateToConsole: () => void;
   currentView: string;
   onSetView: (view: 'chat' | 'console' | 'settings' | 'calls', eventCoords?: { x: number; y: number }) => void;
@@ -102,8 +102,8 @@ export default function Sidebar({
     return unsub;
   }, [currentUserId]);
 
-  // 2. Fetch all registered users to start chats
-  const fetchAvailableUsers = async () => {
+  // 2. Fetch all registered users to start chats (using real-time onSnapshot for maximum reactivity)
+  useEffect(() => {
     if (!currentUserId) return;
 
     if (currentUserId.startsWith('demo_')) {
@@ -113,6 +113,32 @@ export default function Sidebar({
         { uid: 'demo_user3', username: 'КосмическийКот_101', email: 'cat@demo.com', avatar: '🐱', status: 'offline', role: 'user', createdAt: Date.now() }
       ];
       setAvailableUsers(mockUsers);
+      return;
+    }
+
+    const q = collection(db, 'users');
+    const unsub = onSnapshot(q, (snap) => {
+      const users: UserProfile[] = [];
+      const seenUids = new Set<string>();
+      snap.forEach((doc) => {
+        const u = doc.data() as UserProfile;
+        if (u.uid && u.uid !== currentUserId && !seenUids.has(u.uid)) {
+          seenUids.add(u.uid);
+          users.push(u);
+        }
+      });
+      setAvailableUsers(users);
+    }, (error) => {
+      console.warn("Error subscribing to users in real-time:", error);
+    });
+
+    return unsub;
+  }, [currentUserId]);
+
+  const fetchAvailableUsers = async () => {
+    if (!currentUserId) return;
+
+    if (currentUserId.startsWith('demo_')) {
       return;
     }
 
@@ -130,15 +156,9 @@ export default function Sidebar({
       });
       setAvailableUsers(users);
     } catch (err) {
-      console.error("Error fetching users:", err);
+      console.error("Error fetching users manually:", err);
     }
   };
-
-  useEffect(() => {
-    if (showNewChat) {
-      fetchAvailableUsers();
-    }
-  }, [showNewChat]);
 
   // 3. Create or Open a direct chat
   const handleStartDirectChat = async (targetUser: UserProfile) => {
@@ -148,7 +168,7 @@ export default function Sidebar({
     );
 
     if (existing) {
-      onSelectChat(existing);
+      onSelectChat(existing, undefined, targetUser.username);
       onSetView('chat');
       setShowNewChat(false);
       return;
@@ -164,7 +184,7 @@ export default function Sidebar({
         lastMessageAt: Date.now()
       };
       setChats([newChat, ...chats]);
-      onSelectChat(newChat);
+      onSelectChat(newChat, undefined, targetUser.username);
       onSetView('chat');
       setShowNewChat(false);
       return;
@@ -189,7 +209,7 @@ export default function Sidebar({
         lastMessageAt: Date.now()
       };
 
-      onSelectChat(newChat);
+      onSelectChat(newChat, undefined, targetUser.username);
       onSetView('chat');
       setShowNewChat(false);
     } catch (err) {
@@ -210,15 +230,35 @@ export default function Sidebar({
     setIsSearching(true);
 
     try {
-      const cleanQuery = queryName.toLowerCase();
+      // Robust normalized query: lowercase, trim, strip leading '@' (Telegram style handles)
+      let cleanQuery = queryName.toLowerCase().trim();
+      if (cleanQuery.startsWith('@')) {
+        cleanQuery = cleanQuery.slice(1).trim();
+      }
+
+      if (!cleanQuery) {
+        setSearchError('Введите корректный никнейм');
+        return;
+      }
+
       let foundUser: UserProfile | null = null;
 
       // 1. First, search locally in already loaded availableUsers
       if (availableUsers.length > 0) {
-        const matched = availableUsers.find(u => 
-          u.username.toLowerCase().includes(cleanQuery) || 
-          (u.email || '').toLowerCase().includes(cleanQuery)
+        // Try EXACT username or email match first (case-insensitive)
+        let matched = availableUsers.find(u => 
+          u.username.toLowerCase() === cleanQuery || 
+          (u.email || '').toLowerCase() === cleanQuery
         );
+        
+        // If no exact match, fallback to contains/includes match
+        if (!matched) {
+          matched = availableUsers.find(u => 
+            u.username.toLowerCase().includes(cleanQuery) || 
+            (u.email || '').toLowerCase().includes(cleanQuery)
+          );
+        }
+
         if (matched) {
           foundUser = matched;
         }
@@ -236,10 +276,20 @@ export default function Sidebar({
           }
         });
 
-        const matched = allUsers.find(u => 
-          u.username.toLowerCase().includes(cleanQuery) || 
-          (u.email || '').toLowerCase().includes(cleanQuery)
+        // Try EXACT match first
+        let matched = allUsers.find(u => 
+          u.username.toLowerCase() === cleanQuery || 
+          (u.email || '').toLowerCase() === cleanQuery
         );
+        
+        // Fallback to partial match
+        if (!matched) {
+          matched = allUsers.find(u => 
+            u.username.toLowerCase().includes(cleanQuery) || 
+            (u.email || '').toLowerCase().includes(cleanQuery)
+          );
+        }
+
         if (matched) {
           foundUser = matched;
         }
@@ -287,7 +337,7 @@ export default function Sidebar({
         lastMessageAt: Date.now()
       };
 
-      onSelectChat(newGroup);
+      onSelectChat(newGroup, undefined, newGroup.name);
       onSetView('chat');
       setNewGroupName('');
       setShowCreateGroup(false);
@@ -460,11 +510,29 @@ export default function Sidebar({
         <div className="p-3">
           {activeTab === 'chats' && (
             <button
-              onClick={() => setShowNewChat(true)}
-              className={`w-full py-2 rounded-xl flex items-center justify-center gap-2 text-xs font-semibold shadow-md transition-all cursor-pointer ${getAccentBg()}`}
+              type="button"
+              onClick={() => {
+                setShowNewChat(!showNewChat);
+                setTargetUsername('');
+                setSearchError('');
+              }}
+              className={`w-full py-2 rounded-xl flex items-center justify-center gap-2 text-xs font-semibold shadow-md transition-all cursor-pointer ${
+                showNewChat
+                  ? 'bg-slate-800 border border-slate-700/80 text-emerald-400 font-bold shadow-sm'
+                  : getAccentBg()
+              }`}
             >
-              <UserPlus className="w-4 h-4" />
-              Начать анонимный диалог
+              {showNewChat ? (
+                <>
+                  <Search className="w-4 h-4" />
+                  Закрыть поиск
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4" />
+                  Новый чат
+                </>
+              )}
             </button>
           )}
 
@@ -499,46 +567,159 @@ export default function Sidebar({
             </p>
           </div>
         ) : activeTab === 'chats' ? (
-          <div className="space-y-1">
-            {chats.filter(c => c.type === 'direct').length === 0 ? (
-              <div className="py-12 text-center text-xs text-slate-500 font-mono">
-                Нет активных диалогов.<br />Нажмите «Начать диалог» выше.
-              </div>
-            ) : (
-              chats
-                .filter(c => c.type === 'direct')
-                .map((chat) => {
-                  const isActive = chat.id === activeChatId;
-                  return (
+          <div className="space-y-4">
+            {showNewChat && (
+              /* Search/New Chat Area - shown when showNewChat is true */
+              <div className="space-y-3 animate-fade-in">
+                <form onSubmit={handleSearchAndStartChat} className="space-y-3 p-3 bg-slate-900/40 border border-slate-800/80 rounded-2xl">
+                  <div className="flex items-center gap-1.5 px-1">
+                    <Search className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                    <span className="text-[10px] font-mono font-bold text-slate-300 uppercase tracking-widest block">Поиск по юзернейму</span>
+                  </div>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-mono">@</span>
+                    <input
+                      type="text"
+                      value={targetUsername}
+                      onChange={(e) => {
+                        setTargetUsername(e.target.value);
+                        setSearchError('');
+                      }}
+                      placeholder="Введите никнейм..."
+                      className="w-full pl-7 pr-16 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50 transition-colors"
+                      disabled={isSearching}
+                      autoFocus
+                      required
+                    />
                     <button
-                      key={chat.id}
-                      onClick={(e) => onSelectChat(chat, { x: e.clientX, y: e.clientY })}
-                      className={`w-full flex items-center gap-3 p-2.5 rounded-xl text-left transition-all cursor-pointer ${
-                        isActive 
-                          ? 'bg-slate-800 text-white' 
-                          : 'hover:bg-slate-900/60 text-slate-300'
-                      }`}
+                      type="submit"
+                      disabled={isSearching}
+                      className="absolute right-1 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-[9px] font-bold uppercase rounded-lg transition-all disabled:opacity-50 cursor-pointer"
                     >
-                      <div className="w-10 h-10 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-center text-xl flex-shrink-0">
-                        💬
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium text-xs truncate">Личный чат</span>
-                          {chat.lastMessageAt && (
-                            <span className="text-[9px] text-slate-500 font-mono">
-                              {new Date(chat.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-[10px] text-slate-400 truncate mt-0.5">
-                          {chat.lastMessageText || 'Сообщений пока нет'}
-                        </p>
-                      </div>
+                      {isSearching ? '...' : 'Найти'}
                     </button>
-                  );
-                })
+                  </div>
+                  {searchError && (
+                    <div className="text-[9px] text-rose-400 font-mono bg-rose-500/5 border border-rose-500/10 px-2 py-1 rounded">
+                      ⚠️ {searchError}
+                    </div>
+                  )}
+                </form>
+
+                {/* Search Results */}
+                {targetUsername.trim() ? (
+                  <div className="space-y-2 px-1">
+                    <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest block">Результаты поиска</span>
+                    <div className="space-y-1 max-h-[160px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-slate-800">
+                      {(() => {
+                        const searchQ = targetUsername.trim().toLowerCase().replace(/^@/, '');
+                        const filtered = availableUsers.filter(user => 
+                          user.username.toLowerCase().includes(searchQ) || 
+                          (user.email || '').toLowerCase().includes(searchQ)
+                        );
+                        
+                        if (filtered.length === 0) {
+                          return (
+                            <div className="text-center py-4 text-[10px] text-slate-500 font-mono">
+                              Собеседник с никнеймом «{targetUsername}» не найден
+                            </div>
+                          );
+                        }
+
+                        return filtered.map((user) => (
+                          <button
+                            key={user.uid}
+                            type="button"
+                            onClick={() => {
+                              handleStartDirectChat(user);
+                              setTargetUsername('');
+                            }}
+                            className="w-full flex items-center gap-2.5 p-2 bg-slate-900/20 hover:bg-slate-900/60 border border-slate-800/45 hover:border-slate-700 rounded-xl text-left transition-all cursor-pointer group"
+                          >
+                            <span className="text-lg group-hover:scale-110 transition-transform">{user.avatar || '🤖'}</span>
+                            <div className="flex-1 min-w-0">
+                              <span className="font-semibold text-xs text-slate-300 block truncate group-hover:text-emerald-400 transition-colors">
+                                @{user.username}
+                              </span>
+                            </div>
+                            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                              user.status === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-slate-700'
+                            }`} />
+                          </button>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-4 text-center text-[10px] text-slate-500 font-mono bg-slate-900/10 rounded-xl border border-slate-900/40 p-3 mx-1">
+                    Начните вводить никнейм выше для поиска.
+                  </div>
+                )}
+              </div>
             )}
+
+            {/* List of active direct chats - always shown */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-[9px] font-mono text-slate-500 uppercase tracking-widest block">
+                  Мои переписки
+                </span>
+                <span className="text-[9px] font-mono text-slate-600">
+                  {chats.filter(c => c.type === 'direct').length} диалогов
+                </span>
+              </div>
+
+              <div className="space-y-1">
+                {chats.filter(c => c.type === 'direct').length === 0 ? (
+                  <div className="py-12 text-center text-xs text-slate-500 font-mono bg-slate-900/5 border border-dashed border-slate-900/40 rounded-2xl">
+                    Нет активных диалогов.<br />Нажмите «Новый чат» выше, чтобы найти собеседника.
+                  </div>
+                ) : (
+                  chats
+                    .filter(c => c.type === 'direct')
+                    .map((chat) => {
+                      const isActive = chat.id === activeChatId;
+                      const otherMemberId = chat.members.find((m) => m !== currentUserId) || '';
+                      const otherProfile = availableUsers.find((u) => u.uid === otherMemberId);
+                      const displayName = otherProfile ? otherProfile.username : 'Анонимный собеседник';
+                      const displayAvatar = otherProfile ? otherProfile.avatar || '🤖' : '💬';
+                      const isOnline = otherProfile ? otherProfile.status === 'online' : false;
+
+                      return (
+                        <button
+                          key={chat.id}
+                          onClick={(e) => onSelectChat(chat, { x: e.clientX, y: e.clientY }, displayName)}
+                          className={`w-full flex items-center gap-3 p-2.5 rounded-xl text-left transition-all cursor-pointer relative ${
+                            isActive 
+                              ? 'bg-slate-800 text-white shadow-md border border-slate-700/50' 
+                              : 'hover:bg-slate-900/60 text-slate-300 border border-transparent'
+                          }`}
+                        >
+                          <div className="w-10 h-10 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-center text-xl flex-shrink-0 relative">
+                            {displayAvatar}
+                            <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-slate-900 ${
+                              isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-700'
+                            }`} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold text-xs truncate">@{displayName}</span>
+                              {chat.lastMessageAt && (
+                                <span className="text-[9px] text-slate-500 font-mono">
+                                  {new Date(chat.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                              {chat.lastMessageText || 'Сообщений пока нет'}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })
+                )}
+              </div>
+            </div>
           </div>
         ) : activeTab === 'groups' ? (
           <div className="space-y-1">
@@ -554,7 +735,7 @@ export default function Sidebar({
                   return (
                     <button
                       key={chat.id}
-                      onClick={(e) => onSelectChat(chat, { x: e.clientX, y: e.clientY })}
+                      onClick={(e) => onSelectChat(chat, { x: e.clientX, y: e.clientY }, chat.name)}
                       className={`w-full flex items-center gap-3 p-2.5 rounded-xl text-left transition-all cursor-pointer ${
                         isActive 
                           ? 'bg-slate-800 text-white' 
@@ -800,8 +981,23 @@ export default function Sidebar({
                 <div className="text-center py-4 text-[10px] text-slate-600 font-mono">
                   Собеседники пока не найдены.<br />Нажмите «Обновить» ниже.
                 </div>
-              ) : (
-                availableUsers.map((user) => (
+              ) : (() => {
+                const searchQ = targetUsername.trim().toLowerCase().replace(/^@/, '');
+                const filtered = availableUsers.filter(user => 
+                  !searchQ || 
+                  user.username.toLowerCase().includes(searchQ) || 
+                  (user.email || '').toLowerCase().includes(searchQ)
+                );
+                
+                if (filtered.length === 0) {
+                  return (
+                    <div className="text-center py-4 text-[10px] text-slate-500 font-mono">
+                      Нет собеседников по запросу «{targetUsername}»
+                    </div>
+                  );
+                }
+
+                return filtered.map((user) => (
                   <button
                     key={user.uid}
                     onClick={() => handleStartDirectChat(user)}
@@ -817,8 +1013,8 @@ export default function Sidebar({
                       user.status === 'online' ? 'bg-emerald-500' : 'bg-slate-700'
                     }`} />
                   </button>
-                ))
-              )}
+                ));
+              })()}
             </div>
 
             <div className="flex gap-2 mt-4 pt-4 border-t border-slate-800/60">

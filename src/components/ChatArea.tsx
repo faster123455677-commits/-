@@ -32,7 +32,8 @@ import {
   UserCheck,
   Copy,
   Check,
-  Sparkles
+  Sparkles,
+  ArrowLeft
 } from 'lucide-react';
 
 interface ChatAreaProps {
@@ -42,6 +43,7 @@ interface ChatAreaProps {
   chat: Chat | null;
   onInitiateCall: (receiverId: string, type: 'voice' | 'video') => void;
   onSelectChat: (chat: Chat) => void;
+  onCloseChat?: () => void;
 }
 
 export default function ChatArea({
@@ -50,7 +52,8 @@ export default function ChatArea({
   currentConfig,
   chat,
   onInitiateCall,
-  onSelectChat
+  onSelectChat,
+  onCloseChat
 }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [typedMessage, setTypedMessage] = useState('');
@@ -686,6 +689,16 @@ export default function ChatArea({
       {/* 1. HEADER */}
       <div className="p-4 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between z-10">
         <div className="flex items-center gap-3">
+          {onCloseChat && (
+            <button
+              type="button"
+              onClick={onCloseChat}
+              className="p-2 mr-1 bg-slate-800 hover:bg-slate-700 border border-slate-700/80 text-slate-200 rounded-xl transition-all cursor-pointer flex items-center justify-center"
+              title="Выйти из чата"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          )}
           <div className="w-10 h-10 bg-slate-800 border border-slate-700/80 rounded-xl flex items-center justify-center text-2xl">
             {chatDisplayAvatar}
           </div>
